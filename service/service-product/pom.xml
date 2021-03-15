@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.atguigu.gmall</groupId>
+        <artifactId>service</artifactId>
+        <version>1.0</version>
+    </parent>
+
+    <artifactId>service-product</artifactId>
+    <version>1.0</version>
+
+    <packaging>jar</packaging>
+    <name>service-product</name>
+    <description>service-product</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>net.oschina.zcx7878</groupId>
+            <artifactId>fastdfs-client-java</artifactId>
+        </dependency>
+
+        <!--rabbitmq消息队列-->
+        <dependency>
+            <groupId>com.atguigu.gmall</groupId>
+            <artifactId>rabbit-util</artifactId>
+            <version>1.0</version>
+        </dependency>
+
+    </dependencies>
+
+</project>
