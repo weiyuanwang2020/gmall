@@ -213,4 +213,6 @@ public class OrderInfo implements Serializable {
     public void setOutTradeNo(String outTradeNo) {
         this.outTradeNo = outTradeNo;
     }
+
+
 }

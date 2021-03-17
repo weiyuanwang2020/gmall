@@ -158,4 +158,25 @@
         </where>
         order by info.condition_amount desc, info.benefit_discount desc
     </select>
+    <select id="selectTradeCouponInfoList" resultMap="CouponInfoMap">
+        select
+        info.id,info.coupon_name,info.coupon_type,info.condition_amount,info.condition_num,info.activity_id,info.benefit_amount,info.benefit_discount,info.create_time,info.range_type,info.limit_num,info.range_desc,info.taken_count,info.start_time,info.end_time,info.operate_time,info.expire_time,
+        crange.range_id as rangeId
+        from  coupon_use cuse
+        inner join coupon_info info on cuse.coupon_id = info.id
+        inner join coupon_range crange on crange.coupon_id = info.id
+        <where>
+            <foreach collection="skuInfoList" item="item" index="index" open="(" separator="or" close=")">
+                (
+                (crange.range_type = 'SPU' and crange.range_id = #{item.spuId})
+                or (crange.range_type = 'CATAGORY' and crange.range_id = #{item.category3Id})
+                or (crange.range_type = 'TRADEMARK' and crange.range_id = #{item.tmId})
+                )
+            </foreach>
+            and cuse.user_id = #{userId}
+            and cuse.coupon_status = 'NOT_USED'
+            and info.expire_time >= now()
+        </where>
+        order by info.condition_amount desc, info.benefit_discount desc
+    </select>
 </mapper>

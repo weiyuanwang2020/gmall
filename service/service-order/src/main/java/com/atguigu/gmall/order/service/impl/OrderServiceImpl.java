@@ -2,17 +2,19 @@ package com.atguigu.gmall.order.service.impl;
 
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
+import com.atguigu.gmall.activity.client.ActivityFeignClient;
 import com.atguigu.gmall.common.constant.MqConst;
 import com.atguigu.gmall.common.service.RabbitService;
 import com.atguigu.gmall.common.util.HttpClientUtil;
+import com.atguigu.gmall.model.activity.ActivityRule;
+import com.atguigu.gmall.model.activity.CouponInfo;
 import com.atguigu.gmall.model.enums.OrderStatus;
 import com.atguigu.gmall.model.enums.ProcessStatus;
-import com.atguigu.gmall.model.order.OrderDetail;
-import com.atguigu.gmall.model.order.OrderInfo;
-import com.atguigu.gmall.order.mapper.OrderDetailMapper;
-import com.atguigu.gmall.order.mapper.OrderInfoMapper;
+import com.atguigu.gmall.model.order.*;
+import com.atguigu.gmall.order.mapper.*;
 import com.atguigu.gmall.order.service.OrderService;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.toolkit.CollectionUtils;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,6 +23,7 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.*;
 
 @Service
@@ -38,11 +41,24 @@ public class OrderServiceImpl extends ServiceImpl<OrderInfoMapper, OrderInfo> im
     @Autowired
     private RabbitService rabbitService;
 
+    @Autowired
+    private OrderDetailActivityMapper orderDetailActivityMapper;
+
+    @Autowired
+    private OrderDetailCouponMapper orderDetailCouponMapper;
+
+    @Autowired
+    private OrderStatusLogMapper orderStatusLogMapper;
+
+    @Autowired
+    private ActivityFeignClient activityFeignClient;
+
+
     @Value("${ware.url}")
     private String WARE_URL;
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Long saveOrderInfo(OrderInfo orderInfo) {
         orderInfo.sumTotalAmount();
         orderInfo.setOrderStatus(OrderStatus.UNPAID.name());
@@ -67,12 +83,51 @@ public class OrderServiceImpl extends ServiceImpl<OrderInfoMapper, OrderInfo> im
             orderInfo.setTradeBody(tradeBody.toString());
         }
 
+        orderInfo.setFeightFee(new BigDecimal("0"));
+        orderInfo.setOperateTime(orderInfo.getCreateTime());
+        BigDecimal activityReduceAmount = orderInfo.getActivityReduceAmount(orderInfo);
+        orderInfo.setActivityReduceAmount(activityReduceAmount);
+
         orderInfoMapper.insert(orderInfo);
+
+        Map<String, BigDecimal> skuIdToReduceAmountMap = orderInfo.computeOrderDetailPayAmount(orderInfo);
+        // sku对应的订单明细
+        Map<Long, Long> skuIdToOrderDetailIdMap = new HashMap<>();
 
         for (OrderDetail orderDetail : orderDetailList) {
             orderDetail.setOrderId(orderInfo.getId());
+            orderDetail.setCreateTime(new Date());
+
+            // 促销活动分摊金额
+            BigDecimal splitActivityAmount = skuIdToReduceAmountMap.get("activity:"+orderDetail.getSkuId());
+            if(null == splitActivityAmount) {
+                splitActivityAmount = new BigDecimal(0);
+            }
+            orderDetail.setSplitActivityAmount(splitActivityAmount);
+
+            //优惠券分摊金额
+            BigDecimal splitCouponAmount = skuIdToReduceAmountMap.get("coupon:"+orderDetail.getSkuId());
+            if(null == splitCouponAmount) {
+                splitCouponAmount = new BigDecimal(0);
+            }
+            orderDetail.setSplitCouponAmount(splitCouponAmount);
+
+            //优惠后的总金额
+            BigDecimal skuTotalAmount = orderDetail.getOrderPrice().multiply(new BigDecimal(orderDetail.getSkuNum()));
+            BigDecimal payAmount = skuTotalAmount.subtract(splitActivityAmount).subtract(splitCouponAmount);
+            orderDetail.setSplitTotalAmount(payAmount);
+
             orderDetailMapper.insert(orderDetail);//没法批量？
+
+            skuIdToOrderDetailIdMap.put(orderDetail.getSkuId(), orderDetail.getId());
         }
+
+        // 记录订单与促销活动和优惠券的关联信息
+        this.saveActivityAndCouponRecord(orderInfo, skuIdToOrderDetailIdMap);
+
+        //记录订单状态
+        this.saveOrderStatusLog(orderInfo.getId(), orderInfo.getOrderStatus());
+
 
         //发送延迟队列，如果定时未支付，取消订单
         rabbitService.sendDelayMessage(MqConst.EXCHANGE_DIRECT_ORDER_CANCEL, MqConst.ROUTING_ORDER_CANCEL, orderInfo.getId(), MqConst.DELAY_TIME);
@@ -231,6 +286,67 @@ public class OrderServiceImpl extends ServiceImpl<OrderInfoMapper, OrderInfo> im
         if ("2".equals(flag)){
             // 发送消息队列，关闭支付宝的交易记录。
             rabbitService.sendMessage(MqConst.EXCHANGE_DIRECT_PAYMENT_CLOSE,MqConst.ROUTING_PAYMENT_CLOSE,orderId);
+        }
+    }
+
+    @Override
+    public void saveOrderStatusLog(Long orderId, String orderStatus) {
+        // 记录订单状态
+        OrderStatusLog orderStatusLog = new OrderStatusLog();
+        orderStatusLog.setOrderId(orderId);
+        orderStatusLog.setOrderStatus(orderStatus);
+        orderStatusLog.setOperateTime(new Date());
+        orderStatusLogMapper.insert(orderStatusLog);
+    }
+
+
+    /**
+     * 记录订单与促销活动和优惠券的关联信息
+     * @param orderInfo
+     * @param skuIdToOrderDetailIdMap
+     */
+    private void saveActivityAndCouponRecord(OrderInfo orderInfo, Map<Long, Long> skuIdToOrderDetailIdMap) {
+        //记录促销活动
+        List<OrderDetailVo> orderDetailVoList = orderInfo.getOrderDetailVoList();
+        if(!CollectionUtils.isEmpty(orderDetailVoList)) {
+            for(OrderDetailVo orderDetailVo : orderDetailVoList) {
+                ActivityRule activityRule = orderDetailVo.getActivityRule();
+                if(null != activityRule) {
+                    for(Long skuId : activityRule.getSkuIdList()) {
+                        OrderDetailActivity orderDetailActivity = new OrderDetailActivity();
+                        orderDetailActivity.setOrderId(orderInfo.getId());
+                        orderDetailActivity.setOrderDetailId(skuIdToOrderDetailIdMap.get(skuId));
+                        orderDetailActivity.setActivityId(activityRule.getActivityId());
+                        orderDetailActivity.setActivityRule(activityRule.getId());
+                        orderDetailActivity.setSkuId(skuId);
+                        orderDetailActivity.setCreateTime(new Date());
+                        orderDetailActivityMapper.insert(orderDetailActivity);
+                    }
+                }
+            }
+        }
+
+        // 记录优惠券
+        // 是否更新优惠券状态
+        Boolean isUpdateCouponStatus = false;
+        CouponInfo couponInfo = orderInfo.getCouponInfo();
+        if(null != couponInfo) {
+            List<Long> skuIdList = couponInfo.getSkuIdList();
+            for (Long skuId : skuIdList) {
+                OrderDetailCoupon orderDetailCoupon = new OrderDetailCoupon();
+                orderDetailCoupon.setOrderId(orderInfo.getId());
+                orderDetailCoupon.setOrderDetailId(skuIdToOrderDetailIdMap.get(skuId));
+                orderDetailCoupon.setCouponId(couponInfo.getId());
+                orderDetailCoupon.setSkuId(skuId);
+                orderDetailCoupon.setCreateTime(new Date());
+                orderDetailCouponMapper.insert(orderDetailCoupon);
+
+                // 更新优惠券使用状态
+                if(!isUpdateCouponStatus) {
+                    activityFeignClient.updateCouponInfoUseStatus(couponInfo.getId(), orderInfo.getUserId(), orderInfo.getId());
+                }
+                isUpdateCouponStatus = true;
+            }
         }
     }
 

@@ -7,6 +7,8 @@ import com.atguigu.gmall.common.util.AuthContextHolder;
 import com.atguigu.gmall.model.activity.CouponInfo;
 import com.atguigu.gmall.model.cart.CarInfoVo;
 import com.atguigu.gmall.model.cart.CartInfo;
+import com.atguigu.gmall.model.order.OrderDetail;
+import com.atguigu.gmall.model.order.OrderTradeVo;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import io.swagger.annotations.ApiOperation;
@@ -62,6 +64,19 @@ public class ActivityApiController {
     @PostMapping("inner/findCartActivityAndCoupon/{userId}")
     public List<CarInfoVo> findCartActivityAndCoupon(@RequestBody List<CartInfo> cartInfoList, @PathVariable("userId") Long userId) {
         return activityService.findCartActivityAndCoupon(cartInfoList, userId);
+    }
+
+    @ApiOperation(value = "获取交易满足条件的促销与优惠券信息")
+    @PostMapping("inner/findTradeActivityAndCoupon/{userId}")
+    public OrderTradeVo findTradeActivityAndCoupon(@RequestBody List<OrderDetail> orderDetailList, @PathVariable("userId") Long userId, HttpServletRequest request) {
+        return activityService.findTradeActivityAndCoupon(orderDetailList, userId);
+    }
+
+    @ApiOperation(value = "更新优惠券使用状态")
+    @GetMapping("inner/updateCouponInfoUseStatus/{couponId}/{userId}/{orderId}")
+    public Boolean updateCouponInfoUseStatus(@PathVariable("couponId") Long couponId, @PathVariable("userId") Long userId, @PathVariable("orderId") Long orderId) {
+        couponInfoService.updateCouponInfoUseStatus(couponId, userId, orderId);
+        return true;
     }
 
 

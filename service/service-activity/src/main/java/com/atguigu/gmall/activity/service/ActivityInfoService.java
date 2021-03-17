@@ -5,6 +5,7 @@ import com.atguigu.gmall.model.activity.ActivityRule;
 import com.atguigu.gmall.model.activity.ActivityRuleVo;
 import com.atguigu.gmall.model.cart.CarInfoVo;
 import com.atguigu.gmall.model.cart.CartInfo;
+import com.atguigu.gmall.model.order.OrderDetail;
 import com.atguigu.gmall.model.product.SkuInfo;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -46,6 +47,13 @@ public interface ActivityInfoService extends IService<ActivityInfo> {
      * @return
      */
     List<CarInfoVo> findCartActivityRuleMap(List<CartInfo> cartInfoList, Map<Long, Long> skuIdToActivityIdMap);
+
+    /**
+     * 获取购物项中活动id对应的最优促销活动规则
+     * @param orderDetailList  购物项列表
+     * @return
+     */
+    Map<Long, ActivityRule> findTradeActivityRuleMap(List<OrderDetail> orderDetailList);
 
 
 }

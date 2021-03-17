@@ -7,10 +7,14 @@ import com.atguigu.gmall.model.activity.ActivityRule;
 import com.atguigu.gmall.model.activity.CouponInfo;
 import com.atguigu.gmall.model.cart.CarInfoVo;
 import com.atguigu.gmall.model.cart.CartInfo;
+import com.atguigu.gmall.model.order.OrderDetail;
+import com.atguigu.gmall.model.order.OrderDetailVo;
+import com.atguigu.gmall.model.order.OrderTradeVo;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
 
+import java.math.BigDecimal;
 import java.util.*;
 
 @Service
@@ -77,5 +81,63 @@ public class ActivityServiceImpl implements ActivityService {
         }
 
         return carInfoVoList;
+    }
+
+    @Override
+    public OrderTradeVo findTradeActivityAndCoupon(List<OrderDetail> orderDetailList, Long userId) {
+        OrderTradeVo orderTradeVo = new OrderTradeVo();
+
+        Map<Long, ActivityRule> activityIdToActivityRuleMap = activityInfoService.findTradeActivityRuleMap(orderDetailList);
+
+        Map<Long, OrderDetail> skuIdToOrderDetailMap = new HashMap<>();
+        for (OrderDetail orderDetail : orderDetailList) {
+            skuIdToOrderDetailMap.put(orderDetail.getSkuId(), orderDetail);
+        }
+
+        List<Long> activitySkuId = new ArrayList<>();
+        List<OrderDetailVo> orderDetailVoList = new ArrayList<>();
+        BigDecimal activityReduceAmount = new BigDecimal("0");
+        if(!CollectionUtils.isEmpty(activityIdToActivityRuleMap)){
+            Iterator<Map.Entry<Long, ActivityRule>> iterator = activityIdToActivityRuleMap.entrySet().iterator();
+            while(iterator.hasNext()){
+                OrderDetailVo orderDetailVo = new OrderDetailVo();
+                orderDetailVoList.add(orderDetailVo);
+                List<OrderDetail> detailList = new ArrayList<>();
+                orderDetailVo.setOrderDetailList(detailList);
+
+                Map.Entry<Long, ActivityRule> entry = iterator.next();
+                Long activityId = entry.getKey();
+                ActivityRule activityRule = entry.getValue();
+                orderDetailVo.setActivityRule(activityRule);
+                List<Long> skuIdList = activityRule.getSkuIdList();
+                activitySkuId.addAll(skuIdList);
+                for (Long skuId : skuIdList) {
+                    OrderDetail orderDetail = skuIdToOrderDetailMap.get(skuId);
+                    detailList.add(orderDetail);
+                }
+
+                activityReduceAmount = activityReduceAmount.add(activityRule.getReduceAmount());
+            }
+        }
+
+        List<OrderDetail> detailList = new ArrayList<>();
+        for (OrderDetail orderDetail : orderDetailList) {
+            if(!activitySkuId.contains(orderDetail.getSkuId())){
+                detailList.add(orderDetail);
+            }
+        }
+        OrderDetailVo orderDetailVo = new OrderDetailVo();
+        orderDetailVo.setActivityRule(null);
+        orderDetailVo.setOrderDetailList(detailList);
+        orderDetailVoList.add(orderDetailVo);
+
+        orderTradeVo.setActivityReduceAmount(activityReduceAmount);
+        orderTradeVo.setOrderDetailVoList(orderDetailVoList);
+
+        //优惠券处理，获取购物项能使用的优惠券
+        List<CouponInfo> couponInfoList = couponInfoService.findTradeCouponInfo(orderDetailList, activityIdToActivityRuleMap, userId);
+        orderTradeVo.setCouponInfoList(couponInfoList);
+
+        return orderTradeVo;
     }
 }

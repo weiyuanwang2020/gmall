@@ -2,12 +2,16 @@ package com.atguigu.gmall.order.controller;
 
 import com.alibaba.fastjson.JSON;
 import com.alibaba.nacos.client.naming.utils.StringUtils;
+import com.atguigu.gmall.activity.client.ActivityFeignClient;
 import com.atguigu.gmall.cart.client.CartFeignClient;
 import com.atguigu.gmall.common.result.Result;
 import com.atguigu.gmall.common.util.AuthContextHolder;
+import com.atguigu.gmall.model.activity.CouponInfo;
 import com.atguigu.gmall.model.cart.CartInfo;
 import com.atguigu.gmall.model.order.OrderDetail;
+import com.atguigu.gmall.model.order.OrderDetailVo;
 import com.atguigu.gmall.model.order.OrderInfo;
+import com.atguigu.gmall.model.order.OrderTradeVo;
 import com.atguigu.gmall.model.user.UserAddress;
 import com.atguigu.gmall.order.service.OrderService;
 import com.atguigu.gmall.product.client.ProductFeignClient;
@@ -43,6 +47,9 @@ public class OrderApiController {
     @Autowired
     private ThreadPoolExecutor threadPoolExecutor;
 
+    @Autowired
+    private ActivityFeignClient activityFeignClient;
+
     /**
      * 确认订单
      * @param request
@@ -65,13 +72,28 @@ public class OrderApiController {
             orderDetailList.add(orderDetail);
         }
 
+        OrderTradeVo orderTradeVo = activityFeignClient.findTradeActivityAndCoupon(orderDetailList, Long.parseLong(userId));
+        BigDecimal activityReduceAmount = orderTradeVo.getActivityReduceAmount();
+        List<CouponInfo> couponInfoList = orderTradeVo.getCouponInfoList();
+        List<OrderDetailVo> orderDetailVoList = orderTradeVo.getOrderDetailVoList();
+
+
         OrderInfo orderInfo = new OrderInfo();
         orderInfo.setOrderDetailList(orderDetailList);
+        orderInfo.setActivityReduceAmount(activityReduceAmount);
         orderInfo.sumTotalAmount();
+
+
 
         String tradeNo = orderService.getTradeNo(userId);
 
         Map<String, Object> result = new HashMap<>();
+
+        result.put("activityReduceAmount", orderInfo.getActivityReduceAmount());
+        result.put("originalTotalAmount", orderInfo.getOriginalTotalAmount());
+        result.put("orderDetailVoList", orderDetailVoList);
+        result.put("couponInfoList", couponInfoList);
+
         result.put("userAddressList", addressList);
         result.put("detailArrayList", orderDetailList);
         result.put("totalNum", orderDetailList.size());

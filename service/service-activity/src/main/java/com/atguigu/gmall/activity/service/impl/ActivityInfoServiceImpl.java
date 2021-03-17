@@ -9,6 +9,7 @@ import com.atguigu.gmall.model.activity.*;
 import com.atguigu.gmall.model.cart.CarInfoVo;
 import com.atguigu.gmall.model.cart.CartInfo;
 import com.atguigu.gmall.model.enums.ActivityType;
+import com.atguigu.gmall.model.order.OrderDetail;
 import com.atguigu.gmall.model.product.SkuInfo;
 import com.atguigu.gmall.product.client.ProductFeignClient;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
@@ -20,6 +21,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
 
+import java.math.BigDecimal;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -159,6 +161,64 @@ public class ActivityInfoServiceImpl extends ServiceImpl<ActivityInfoMapper, Act
         }
 
         return carInfoVoList;
+    }
+
+    @Override
+    public Map<Long, ActivityRule> findTradeActivityRuleMap(List<OrderDetail> orderDetailList) {
+        Map<Long, ActivityRule> activityIdToActivityRuleMap = new HashMap<>();
+
+        Map<Long, OrderDetail> skuIdToOrderDetailMap = new HashMap<>();
+        for (OrderDetail orderDetail : orderDetailList) {
+            skuIdToOrderDetailMap.put(orderDetail.getSkuId(), orderDetail);
+        }
+
+        List<Long> skuIdList = orderDetailList.stream().map(OrderDetail::getSkuId).collect(Collectors.toList());
+        List<ActivityRule> activityRuleList = activityInfoMapper.selectCartActivityRuleList(skuIdList);
+
+        Map<Long, List<ActivityRule>> activityIdToActivityRuleListMap = activityRuleList.stream().collect(Collectors.groupingBy(ActivityRule::getActivityId));
+        Map<Long, List<ActivityRule>> skuIdToActivityRuleListMap = activityRuleList.stream().collect(Collectors.groupingBy(ActivityRule::getSkuId));
+
+        Iterator<Map.Entry<Long, List<ActivityRule>>> iterator = activityIdToActivityRuleListMap.entrySet().iterator();
+        while(iterator.hasNext()){
+            Map.Entry<Long, List<ActivityRule>> entry = iterator.next();
+            Long activityId = entry.getKey();
+            List<ActivityRule> currentActivityRuleList = entry.getValue();
+            Set<Long> activitySkuIdSet = currentActivityRuleList.stream().map(ActivityRule::getSkuId).collect(Collectors.toSet());
+
+            BigDecimal activityTotalAmount = new BigDecimal(0);
+            Integer activityTotalNum = 0;
+            for (Long skuId : activitySkuIdSet) {
+                OrderDetail orderDetail = skuIdToOrderDetailMap.get(skuId);
+                BigDecimal skuTotalAmount = orderDetail.getOrderPrice().multiply(new BigDecimal(orderDetail.getSkuNum()));
+                //  计算这个活动的总金额
+                activityTotalAmount = activityTotalAmount.add(skuTotalAmount);
+                activityTotalNum += orderDetail.getSkuNum();
+            }
+
+            List<ActivityRule> skuActivityRuleList = skuIdToActivityRuleListMap.get(activitySkuIdSet.iterator().next());
+            for (ActivityRule activityRule : skuActivityRuleList) {
+                activityRule.setSkuIdList(new ArrayList<>(activitySkuIdSet));
+                if(activityRule.getActivityType().equals(ActivityType.FULL_REDUCTION.name())){
+                    if(activityTotalAmount.compareTo(activityRule.getConditionAmount()) > -1){
+                        activityRule.setReduceAmount(activityRule.getBenefitAmount());
+                        activityIdToActivityRuleMap.put(activityRule.getActivityId(), activityRule);
+                        break;
+                    }
+                }else{
+                    if(activityTotalNum.intValue() >= activityRule.getConditionNum()){
+                        BigDecimal skuDiscountTotalAmount = activityTotalAmount.multiply(activityRule.getBenefitDiscount().divide(new BigDecimal("10")));
+                        //  activityTotalAmount-skuDiscountTotalAmount
+                        BigDecimal reduceAmount = activityTotalAmount.subtract(skuDiscountTotalAmount);
+                        //  设置优惠后的金额reduceAmount
+                        activityRule.setReduceAmount(reduceAmount);
+                        activityIdToActivityRuleMap.put(activityRule.getActivityId(), activityRule);
+                        break;
+                    }
+                }
+            }
+        }
+
+        return activityIdToActivityRuleMap;
     }
 
 

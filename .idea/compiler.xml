@@ -14,7 +14,7 @@
         <module name="service-payment-client" />
         <module name="common-util" />
         <module name="service-order" />
-        <module name="service-user-client" />
+        <module name="server-gateway" />
         <module name="service-activity-client" />
         <module name="service-util" />
         <module name="service-user" />
@@ -31,7 +31,7 @@
         <module name="service-product-client" />
         <module name="service-mq" />
         <module name="service-list" />
-        <module name="server-gateway" />
+        <module name="service-user-client" />
         <module name="rabbit-util" />
       </profile>
     </annotationProcessing>

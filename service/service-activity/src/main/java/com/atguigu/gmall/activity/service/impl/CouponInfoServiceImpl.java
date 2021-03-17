@@ -6,14 +6,12 @@ import com.atguigu.gmall.activity.mapper.CouponUseMapper;
 import com.atguigu.gmall.activity.service.CouponInfoService;
 import com.atguigu.gmall.common.execption.GmallException;
 import com.atguigu.gmall.common.result.ResultCodeEnum;
-import com.atguigu.gmall.model.activity.CouponInfo;
-import com.atguigu.gmall.model.activity.CouponRange;
-import com.atguigu.gmall.model.activity.CouponRuleVo;
-import com.atguigu.gmall.model.activity.CouponUse;
+import com.atguigu.gmall.model.activity.*;
 import com.atguigu.gmall.model.cart.CartInfo;
 import com.atguigu.gmall.model.enums.CouponRangeType;
 import com.atguigu.gmall.model.enums.CouponStatus;
 import com.atguigu.gmall.model.enums.CouponType;
+import com.atguigu.gmall.model.order.OrderDetail;
 import com.atguigu.gmall.model.product.BaseCategory3;
 import com.atguigu.gmall.model.product.BaseTrademark;
 import com.atguigu.gmall.model.product.SkuInfo;
@@ -28,6 +26,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
 
+import java.math.BigDecimal;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -227,6 +226,157 @@ public class CouponInfoServiceImpl extends ServiceImpl<CouponInfoMapper, CouponI
         }
 
         return skuIdToCouponInfoListMap;
+    }
+
+    @Override
+    public List<CouponInfo> findTradeCouponInfo(List<OrderDetail> orderDetailList, Map<Long, ActivityRule> activityIdToActivityRuleMap, Long userId) {
+        // 优惠券范围规则数据
+        Map<String, List<Long>> rangeToSkuIdMap = new HashMap<>();
+        // 初始化数据，后续使用
+        Map<Long, OrderDetail> skuIdToOrderDetailMap = new HashMap<>();
+        // 初始化数据，后续使用
+        Map<Long, SkuInfo> skuIdToSkuInfoMap = new HashMap<>();
+        // 所以购物项的sku列表
+        List<SkuInfo> skuInfoList = new ArrayList<>();
+        for (OrderDetail orderDetail : orderDetailList) {
+            SkuInfo skuInfo = productFeignClient.getSkuInfo(orderDetail.getSkuId());
+            skuInfoList.add(skuInfo);
+            skuIdToSkuInfoMap.put(orderDetail.getSkuId(), skuInfo);
+            skuIdToOrderDetailMap.put(orderDetail.getSkuId(), orderDetail);
+            setRuleData(skuInfo, rangeToSkuIdMap);
+        }
+
+        List<CouponInfo> allCouponInfoList = couponInfoMapper.selectTradeCouponInfoList(skuInfoList, userId);
+        for (CouponInfo couponInfo : allCouponInfoList) {
+            String rangeType = couponInfo.getRangeType();
+            Long rangeId = couponInfo.getRangeId();
+
+            if(couponInfo.getActivityId() != null){
+                Iterator<Map.Entry<Long, ActivityRule>> iterator = activityIdToActivityRuleMap.entrySet().iterator();
+                while(iterator.hasNext()){
+                    Map.Entry<Long, ActivityRule> entry = iterator.next();
+                    Long activityId = entry.getKey();
+                    ActivityRule activityRule = entry.getValue();
+
+                    List<Long> skuIdList = activityRule.getSkuIdList();
+                    List<Long> couponSkuIdList = new ArrayList<>();
+                    couponInfo.setSkuIdList(couponSkuIdList);
+                    for (Long skuId : skuIdList) {
+                        SkuInfo skuInfo = skuIdToSkuInfoMap.get(skuId);
+                        if(rangeType.equals(CouponRangeType.SPU.name())){
+                            if(skuInfo.getSpuId().longValue() == rangeId.longValue()){
+                                couponSkuIdList.add(skuId);
+                            }
+                        }else if(rangeType.equals(CouponRangeType.CATAGORY.name())){
+                            if(skuInfo.getCategory3Id().longValue() == rangeId.longValue()){
+                                couponSkuIdList.add(skuId);
+                            }
+                        }else{
+                            if(skuInfo.getTmId().longValue() == rangeId.longValue()){
+                                couponSkuIdList.add(skuId);
+                            }
+                        }
+                    }
+                }
+            }else{
+                if(rangeType.equals(CouponRangeType.SPU.name())){
+                    couponInfo.setSkuIdList(rangeToSkuIdMap.get("range:1:" + rangeId));
+                }else if(rangeType.equals(CouponRangeType.CATAGORY.name())){
+                    couponInfo.setSkuIdList(rangeToSkuIdMap.get("range:2:" + rangeId));
+                }else{
+                    couponInfo.setSkuIdList(rangeToSkuIdMap.get("range:3:" + rangeId));
+                }
+            }
+        }
+
+        List<CouponInfo> resultCouponInfoList = new ArrayList<>();
+        Map<Long, List<CouponInfo>> couponIdToListMap = allCouponInfoList.stream().collect(Collectors.groupingBy(CouponInfo::getId));
+        Iterator<Map.Entry<Long, List<CouponInfo>>> iterator = couponIdToListMap.entrySet().iterator();
+        while(iterator.hasNext()){
+            Map.Entry<Long, List<CouponInfo>> entry = iterator.next();
+            Long couponInfoId = entry.getKey();
+            List<CouponInfo> couponInfoList = entry.getValue();
+
+            List<Long> skuIdList = new ArrayList<>();
+            for (CouponInfo couponInfo : couponInfoList) {
+                skuIdList.addAll(couponInfo.getSkuIdList());
+            }
+            CouponInfo couponInfo = couponInfoList.get(0);
+            couponInfo.setSkuIdList(skuIdList);
+            resultCouponInfoList.add(couponInfo);
+        }
+
+        //记录最优选项金额
+        BigDecimal checkeAmount = new BigDecimal("0");
+        //记录最优优惠券
+        CouponInfo checkeCouponInfo = null;
+        for (CouponInfo couponInfo : resultCouponInfoList) {
+            BigDecimal totalAmount = new BigDecimal("0");
+            int totalNum = 0;
+            BigDecimal reduceAmount = new BigDecimal("0");
+
+            List<Long> skuIdList = couponInfo.getSkuIdList();
+            for (Long skuId : skuIdList) {
+                OrderDetail orderDetail = skuIdToOrderDetailMap.get(skuId);
+                totalAmount = totalAmount.add(orderDetail.getOrderPrice().multiply(new BigDecimal(orderDetail.getSkuNum())));
+                totalNum += orderDetail.getSkuNum();
+            }
+
+            if(couponInfo.getCouponType().equals(CouponType.CASH.name())) {
+                reduceAmount = couponInfo.getBenefitAmount();
+                //标记可选
+                couponInfo.setIsSelect(1);
+            } else if (couponInfo.getCouponType().equals(CouponType.DISCOUNT.name())) {
+                BigDecimal skuDiscountTotalAmount = totalAmount.multiply(couponInfo.getBenefitDiscount().divide(new BigDecimal("10")));
+                reduceAmount = totalAmount.subtract(skuDiscountTotalAmount);
+                //标记可选
+                couponInfo.setIsSelect(1);
+            }  else if (couponInfo.getCouponType().equals(CouponType.FULL_REDUCTION.name())) {
+                if (totalAmount.compareTo(couponInfo.getConditionAmount()) > -1) {
+                    reduceAmount = couponInfo.getBenefitAmount();
+                    //标记可选
+                    couponInfo.setIsSelect(1);
+                }
+            } else {
+                if(totalNum >= couponInfo.getConditionNum().intValue()) {
+                    BigDecimal skuDiscountTotalAmount1 = totalAmount.multiply(couponInfo.getBenefitDiscount().divide(new BigDecimal("10")));
+                    reduceAmount = totalAmount.subtract(skuDiscountTotalAmount1);
+                    //标记可选
+                    couponInfo.setIsSelect(1);
+                }
+            }
+
+            if(reduceAmount.compareTo(checkeAmount) > 0){
+                checkeAmount = reduceAmount;
+                checkeCouponInfo = couponInfo;
+            }
+            couponInfo.setReduceAmount(reduceAmount);
+        }
+
+        if (checkeCouponInfo != null) {
+            for (CouponInfo couponInfo : resultCouponInfoList) {
+                if(couponInfo.getId().longValue() == checkeCouponInfo.getId().longValue()){
+                    couponInfo.setIsChecked(1);
+                }
+            }
+        }
+
+
+        return resultCouponInfoList;
+    }
+
+    @Override
+    public void updateCouponInfoUseStatus(Long couponId, Long userId, Long orderId) {
+        CouponUse couponUse = new CouponUse();
+        couponUse.setOrderId(orderId);
+        couponUse.setCouponStatus(CouponStatus.USED.name());
+        couponUse.setUsingTime(new Date());
+
+        QueryWrapper<CouponUse> queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("coupon_id", couponId);
+        queryWrapper.eq("user_id", userId);
+        couponUseMapper.update(couponUse, queryWrapper);
+
     }
 
     private void setRuleData(SkuInfo skuInfo, Map<String, List<Long>> rangeToSkuIdMap){
